@@ -1,0 +1,321 @@
+//Codigo para Google Earh Engine
+
+// Define Mexico City area geometry
+var CDMX = ee.Geometry.MultiPolygon(
+    [[[[-99.12999352339452, 19.537304701168477],
+       [-99.10802086714452, 19.564481082134428],
+       [-99.11900719526952, 19.585183822229798],
+       [-99.12999352339452, 19.591652882870857],
+       [-99.14372643355077, 19.57224492137731],
+       [-99.15745934370702, 19.559304981577988],
+       [-99.16157921675389, 19.545069848503378],
+       [-99.15883263472264, 19.528244890607713],
+       [-99.16020592573827, 19.501062410981273],
+       [-99.17805870894139, 19.50494590213975],
+       [-99.20689782026952, 19.514007018901665],
+       [-99.22337731245702, 19.475170088402216],
+       [-99.21651085737889, 19.458337859185665],
+       [-99.22475060347264, 19.44150388273976],
+       [-99.22337731245702, 19.424668160336466],
+       [-99.24946984175389, 19.406535431243906],
+       [-99.28654869917577, 19.37285500009456],
+       [-99.30302819136327, 19.375446049829762],
+       [-99.33324059370702, 19.331392604083312],
+       [-99.35658654097264, 19.309361422626267],
+       [-99.35246666792577, 19.29510437021912],
+       [-99.36482628706639, 19.27695723443034],
+       [-99.34285363081639, 19.26658653980137],
+       [-99.34148033980077, 19.24065693312715],
+       [-99.30852135542577, 19.213426437436443],
+       [-99.27968224409764, 19.13041046056411],
+       [-99.22887047651952, 19.09537556634786],
+       [-99.13685997847264, 19.08758902651232],
+       [-99.12724694136327, 19.061631249704085],
+       [-99.05858239058202, 19.04605463253596],
+       [-99.04072960737889, 19.077206403785034],
+       [-99.02836998823827, 19.08758902651232],
+       [-98.97893151167577, 19.077206403785034],
+       [-98.96245201948827, 19.0901845804853],
+       [-98.95833214644139, 19.127815537857845],
+       [-98.96657189253514, 19.14208710820126],
+       [-98.95421227339452, 19.14987108113649],
+       [-98.96794518355077, 19.162843553286773],
+       [-98.95421227339452, 19.1719236765694],
+       [-98.96657189253514, 19.186191430850954],
+       [-98.97069176558202, 19.20564546704245],
+       [-98.94322594526952, 19.2173167845527],
+       [-98.94322594526952, 19.22639390306121],
+       [-98.96794518355077, 19.230283943200053],
+       [-98.96794518355077, 19.249732761669065]]],
+     [[[-98.97481163862889, 19.26399376360554],
+       [-98.96107872847264, 19.322321300830332],
+       [-98.98854454878514, 19.3495336989666],
+       [-98.99678429487889, 19.36767277702421],
+       [-99.05995568159764, 19.398763642612227],
+       [-99.04896935347264, 19.435028811445015],
+       [-99.06819542769139, 19.48293821992505],
+       [-99.06682213667577, 19.497178826603296],
+       [-99.08330162886327, 19.5075348444491],
+       [-99.10527428511327, 19.5075348444491],
+       [-99.11488732222264, 19.510123745315994]]]]);
+
+// Visualize the region
+Map.centerObject(CDMX, 10);
+Map.addLayer(CDMX, {color: '#009999'}, 'Mexico City Area');
+
+// Import the CHIRPS precipitation dataset at pentad (5-day) resolution
+var chirps = ee.ImageCollection("UCSB-CHG/CHIRPS/PENTAD")
+  .filterDate('2024-01-01', '2024-12-31') // Full year of 2024
+  .filterBounds(CDMX);
+
+// Process each pentad image to properly assign dates and display
+var processed_chirps = chirps.map(function(image) {
+  // Get the date info
+  var date = ee.Date(image.get('system:time_start'));
+  var doy = date.getRelative('day', 'year').add(1); // Day of year
+  
+  // Calculate pentad number (1-73 for the year)
+  var pentadNum = doy.divide(5).ceil().toInt();
+  
+  // Format date for display
+  var dateString = date.format('YYYY-MM-dd');
+  
+  // Return image with useful properties
+  return image.set({
+    'pentad': pentadNum,
+    'date_string': dateString,
+    'month': date.get('month'),
+    'date_millis': date.millis()
+  });
+});
+
+// Create a visualization for annual precipitation
+var annualPrecipitation = chirps.select('precipitation').sum().clip(CDMX);
+var precipPalette = ['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'];
+var precipParams = {
+  min: 0,
+  max: 1500,
+  palette: precipPalette
+};
+
+// Add the annual precipitation layer to the map
+Map.addLayer(annualPrecipitation, precipParams, 'Annual Precipitation (mm)');
+
+// Create pentad (5-day) time series chart
+var pentadChart = ui.Chart.image.series({
+  imageCollection: processed_chirps.select('precipitation'),
+  region: CDMX,
+  reducer: ee.Reducer.mean(),
+  scale: 5000,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'Pentad (5-day) Precipitation in Mexico City (2024)',
+  hAxis: {
+    title: 'Date',
+    format: 'MMM d',
+    gridlines: {count: 12}
+  },
+  vAxis: {title: 'Precipitation (mm)'},
+  lineWidth: 1,
+  pointSize: 3,
+  series: {0: {color: '#2c7fb8'}}
+});
+
+// Print the pentad chart
+print("5-day (Pentad) Precipitation Chart", pentadChart);
+
+// Create a cumulative precipitation chart to show accumulation over the year
+var cumulativeChart = ui.Chart.image.series({
+  imageCollection: processed_chirps.select('precipitation'),
+  region: CDMX,
+  reducer: ee.Reducer.mean(),
+  scale: 5000,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'Cumulative Precipitation in Mexico City (2024)',
+  hAxis: {
+    title: 'Date',
+    format: 'MMM d',
+    gridlines: {count: 12}
+  },
+  vAxis: {title: 'Cumulative Precipitation (mm)'},
+  lineWidth: 2,
+  curveType: 'function',
+  series: {0: {color: '#1d6b99'}},
+  trendlines: {0: {
+    type: 'polynomial',
+    degree: 3,
+    color: '#b22400',
+    lineWidth: 1,
+    opacity: 0.5,
+    visibleInLegend: true
+  }}
+});
+
+// Print the cumulative chart
+print("Cumulative Precipitation Chart", cumulativeChart);
+
+// Calculate statistics for each pentad
+var pentadStatsList = processed_chirps.map(function(image) {
+  var stats = image.select('precipitation').reduceRegion({
+    reducer: ee.Reducer.mean().combine({
+      reducer2: ee.Reducer.minMax(),
+      sharedInputs: true
+    }),
+    geometry: CDMX,
+    scale: 5000,
+    maxPixels: 1e9
+  });
+  
+  return ee.Feature(null, {
+    'date': image.get('date_string'),
+    'pentad': image.get('pentad'),
+    'mean': stats.get('precipitation_mean'),
+    'min': stats.get('precipitation_min'),
+    'max': stats.get('precipitation_max')
+  });
+});
+
+// Print pentad statistics
+print("Pentad Precipitation Statistics", pentadStatsList);
+
+// Create a wet/dry season analysis
+// In Mexico City, the wet season is typically May-October
+var wetSeasonStart = ee.Date.fromYMD(2024, 5, 1);
+var wetSeasonEnd = ee.Date.fromYMD(2024, 10, 31);
+
+var wetSeasonPrecip = chirps
+  .filter(ee.Filter.date(wetSeasonStart, wetSeasonEnd))
+  .select('precipitation')
+  .sum()
+  .clip(CDMX);
+
+var drySeasonPrecip = chirps
+  .filter(ee.Filter.or(
+    ee.Filter.date('2024-01-01', wetSeasonStart),
+    ee.Filter.date(wetSeasonEnd, '2024-12-31')
+  ))
+  .select('precipitation')
+  .sum()
+  .clip(CDMX);
+
+// Add wet/dry season layers to map
+Map.addLayer(wetSeasonPrecip, precipParams, 'Wet Season Precipitation');
+Map.addLayer(drySeasonPrecip, {min: 0, max: 300, palette: precipPalette}, 'Dry Season Precipitation', false);
+
+// Calculate seasonal statistics
+var wetSeasonStats = wetSeasonPrecip.reduceRegion({
+  reducer: ee.Reducer.mean().combine({
+    reducer2: ee.Reducer.minMax(),
+    sharedInputs: true
+  }),
+  geometry: CDMX,
+  scale: 5000,
+  maxPixels: 1e9
+});
+
+var drySeasonStats = drySeasonPrecip.reduceRegion({
+  reducer: ee.Reducer.mean().combine({
+    reducer2: ee.Reducer.minMax(),
+    sharedInputs: true
+  }),
+  geometry: CDMX,
+  scale: 5000,
+  maxPixels: 1e9
+});
+
+// Print seasonal statistics
+print("Wet Season (May-Oct) Precipitation Statistics (mm):", wetSeasonStats);
+print("Dry Season (Nov-Apr) Precipitation Statistics (mm):", drySeasonStats);
+
+// Create a legend for the map
+var precipLegend = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    padding: '8px 15px'
+  }
+});
+
+// Create legend title
+var legendTitle = ui.Label({
+  value: 'Precipitation (mm)',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '14px',
+    margin: '0 0 4px 0',
+    padding: '0'
+  }
+});
+
+// Add the title to the panel
+precipLegend.add(legendTitle);
+
+// Create the legend
+var makeRow = function(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+  
+  var description = ui.Label({
+    value: name,
+    style: {margin: '0 0 4px 6px'}
+  });
+  
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+// Create legend items
+var ranges = [
+  '0-300', '300-600', '600-900', 
+  '900-1200', '1200+'
+];
+
+for (var i = 0; i < 5; i++) {
+  precipLegend.add(makeRow(precipPalette[i], ranges[i]));
+}
+
+// Add legend to map
+Map.add(precipLegend);
+
+// Export data at pentad resolution to a CSV file
+Export.table.toDrive({
+  collection: pentadStatsList,
+  description: 'Mexico_City_Pentad_Precipitation_2024',
+  fileFormat: 'CSV'
+});
+
+// Export the annual precipitation data to Google Drive
+Export.image.toDrive({
+  image: annualPrecipitation,
+  description: 'Mexico_City_Annual_Precipitation_2024',
+  scale: 1000,
+  region: CDMX,
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e9
+});
+
+// Export wet and dry season data
+Export.image.toDrive({
+  image: wetSeasonPrecip,
+  description: 'Mexico_City_Wet_Season_Precipitation_2024',
+  scale: 1000,
+  region: CDMX,
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e9
+});
+
+Export.image.toDrive({
+  image: drySeasonPrecip,
+  description: 'Mexico_City_Dry_Season_Precipitation_2024',
+  scale: 1000,
+  region: CDMX,
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e9
+});
