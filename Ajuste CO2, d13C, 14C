@@ -1,0 +1,93 @@
+%% CODIGO PARA MATLAB
+% En data cargar el documento .csv con los datos de las concentraciones de CO2, d13C y 14C del sitio de fondo
+data = readtable('documento.csv');
+t = data.Year; % Llamar la columna de fecha (fraccion de año)
+y = data.C14; %Cambiar la columna dependiendo si es CO2, d13C o 14C
+
+% Remover celdas vacias, sin datos
+valid_indices = ~isnan(y);
+t = t(valid_indices);
+y = y(valid_indices);
+
+% Normalizar el tiempo para comenzar en 0
+t_normalized = t - min(t);
+
+% Funcionamiento del ajuste
+% y(t) = B + d*exp(alpha*t) + A1*sin(2*pi/T * (t + Phi1))
+% B: linea base
+% d: coeficiente exponencial
+% alpha: tasa de crecimiento exponencial
+% A1: amplitud del 1er armonico
+% T: periodo del primer armonico
+% Phi1: cambio de fase del primer armonico
+
+% Initial parameter guess
+p0 = [
+    min(y);    % B: baseline 
+    0.1;       % d: exponential coefficient
+    0.01;      % alpha: exponential growth rate
+    10;        % A1: seasonal amplitude
+    1;         % T: period (initially set to 1)
+    0          % Phi1: phase shift
+];
+
+% Objective function for least squares
+objective = @(p) y - (p(1) + p(2)*exp(p(3)*t_normalized) + p(4)*sin(2*pi/p(5) * (t_normalized + p(6))));
+
+% Use lsqnonlin for parameter estimation
+options = optimoptions('lsqnonlin', 'Display', 'iter', 'Algorithm', 'trust-region-reflective');
+[popt, resnorm, residual, exitflag] = lsqnonlin(objective, p0, [], [], options);
+
+% Extract optimal parameters
+B_opt = popt(1);
+d_opt = popt(2);
+alpha_opt = popt(3);
+A1_opt = popt(4);
+T_opt = popt(5);
+Phi1_opt = popt(6);
+
+% Calculate fitted values for original data
+y_fit = B_opt + d_opt*exp(alpha_opt*t_normalized) + A1_opt*sin(2*pi/T_opt * (t_normalized + Phi1_opt));
+
+% Create extended time range for prediction
+t_min = min(t);
+t_max = max(t);
+t_extended = (t_min:0.05:2026.3)';
+t_extended_normalized = t_extended - t_min;
+
+% Calculate extended prediction
+y_predicted = B_opt + d_opt*exp(alpha_opt*t_extended_normalized) + A1_opt*sin(2*pi/T_opt * (t_extended_normalized + Phi1_opt));
+
+% Plotting
+figure;
+plot(t, y, 'bo', 'DisplayName', 'Actual Data');
+hold on;
+plot(t, y_fit, 'r-', 'DisplayName', 'Original Fit');
+
+% Modify extended prediction to start from the last data point
+t_extended_modified = [t(end); t_extended(t_extended > t(end))];
+y_predicted_modified = [y_fit(end); y_predicted(t_extended > t(end))];
+
+% Plot the extended prediction
+plot(t_extended_modified, y_predicted_modified, 'g-', 'DisplayName', 'Extended Prediction');
+
+xlabel('Year');
+ylabel('CO2 Concentration (ppm)');
+title('CO2 Concentration: Sinusoidal-Exponential Model Fit and Prediction');
+legend;
+grid on;
+
+% Print optimized parameters
+fprintf('Optimized Parameters:\n');
+fprintf('B (Baseline): %.4f\n', B_opt);
+fprintf('d (Exponential Coefficient): %.4f\n', d_opt);
+fprintf('α (Exponential Growth Rate): %.4f\n', alpha_opt);
+fprintf('A1 (Seasonal Amplitude): %.4f\n', A1_opt);
+fprintf('T (Period): %.4f\n', T_opt);
+fprintf('Φ1 (Phase Shift): %.4f\n', Phi1_opt);
+
+% Calculate goodness of fit
+RSS = sum(residual.^2);
+TSS = sum((y - mean(y)).^2);
+R_squared = 1 - (RSS / TSS);
+fprintf('R-squared: %.4f\n', R_squared);
