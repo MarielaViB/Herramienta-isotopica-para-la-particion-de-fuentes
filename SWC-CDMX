@@ -1,0 +1,242 @@
+var CDMX = ee.Geometry.MultiPolygon(
+    [[[[-99.12999352339452, 19.537304701168477],
+       [-99.10802086714452, 19.564481082134428],
+       [-99.11900719526952, 19.585183822229798],
+       [-99.12999352339452, 19.591652882870857],
+       [-99.14372643355077, 19.57224492137731],
+       [-99.15745934370702, 19.559304981577988],
+       [-99.16157921675389, 19.545069848503378],
+       [-99.15883263472264, 19.528244890607713],
+       [-99.16020592573827, 19.501062410981273],
+       [-99.17805870894139, 19.50494590213975],
+       [-99.20689782026952, 19.514007018901665],
+       [-99.22337731245702, 19.475170088402216],
+       [-99.21651085737889, 19.458337859185665],
+       [-99.22475060347264, 19.44150388273976],
+       [-99.22337731245702, 19.424668160336466],
+       [-99.24946984175389, 19.406535431243906],
+       [-99.28654869917577, 19.37285500009456],
+       [-99.30302819136327, 19.375446049829762],
+       [-99.33324059370702, 19.331392604083312],
+       [-99.35658654097264, 19.309361422626267],
+       [-99.35246666792577, 19.29510437021912],
+       [-99.36482628706639, 19.27695723443034],
+       [-99.34285363081639, 19.26658653980137],
+       [-99.34148033980077, 19.24065693312715],
+       [-99.30852135542577, 19.213426437436443],
+       [-99.27968224409764, 19.13041046056411],
+       [-99.22887047651952, 19.09537556634786],
+       [-99.13685997847264, 19.08758902651232],
+       [-99.12724694136327, 19.061631249704085],
+       [-99.05858239058202, 19.04605463253596],
+       [-99.04072960737889, 19.077206403785034],
+       [-99.02836998823827, 19.08758902651232],
+       [-98.97893151167577, 19.077206403785034],
+       [-98.96245201948827, 19.0901845804853],
+       [-98.95833214644139, 19.127815537857845],
+       [-98.96657189253514, 19.14208710820126],
+       [-98.95421227339452, 19.14987108113649],
+       [-98.96794518355077, 19.162843553286773],
+       [-98.95421227339452, 19.1719236765694],
+       [-98.96657189253514, 19.186191430850954],
+       [-98.97069176558202, 19.20564546704245],
+       [-98.94322594526952, 19.2173167845527],
+       [-98.94322594526952, 19.22639390306121],
+       [-98.96794518355077, 19.230283943200053],
+       [-98.96794518355077, 19.249732761669065]]],
+     [[[-98.97481163862889, 19.26399376360554],
+       [-98.96107872847264, 19.322321300830332],
+       [-98.98854454878514, 19.3495336989666],
+       [-98.99678429487889, 19.36767277702421],
+       [-99.05995568159764, 19.398763642612227],
+       [-99.04896935347264, 19.435028811445015],
+       [-99.06819542769139, 19.48293821992505],
+       [-99.06682213667577, 19.497178826603296],
+       [-99.08330162886327, 19.5075348444491],
+       [-99.10527428511327, 19.5075348444491],
+       [-99.11488732222264, 19.510123745315994]]]]);
+
+var cdmx = ee.FeatureCollection([ee.Feature(CDMX)]);
+
+Map.centerObject(CDMX, 11);
+Map.addLayer(CDMX, {color: 'white'}, 'CDMX boundary', false);
+
+// ── 2. DATE RANGE ────────────────────────────────────────────
+var startDate = '2023-11-01';
+var endDate   = '2026-02-01';
+
+// ── 3. LOAD & PROCESS MODIS NDVI (MOD13A2) ───────────────────
+var ndviCol = ee.ImageCollection('MODIS/061/MOD13A2')
+  .filterDate(startDate, endDate)
+  .filterBounds(cdmx)
+  .select('NDVI');
+
+// Scale factor: MODIS NDVI is stored ×10000
+var scaleNDVI = function(img) {
+  return img.multiply(0.0001)
+            .copyProperties(img, ['system:time_start']);
+};
+ndviCol = ndviCol.map(scaleNDVI);
+
+// Long-term min/max for NDVI (entire collection period) per pixel
+var ndviMin = ndviCol.min().clip(CDMX);
+var ndviMax = ndviCol.max().clip(CDMX);
+
+// VCI per image
+var computeVCI = function(img) {
+  var vci = img.subtract(ndviMin)
+               .divide(ndviMax.subtract(ndviMin))
+               .multiply(100)
+               .rename('VCI')
+               .copyProperties(img, ['system:time_start']);
+  return vci;
+};
+var vciCol = ndviCol.map(computeVCI);
+
+// ── 4. LOAD & PROCESS MODIS LST (MOD11A2) ────────────────────
+var lstCol = ee.ImageCollection('MODIS/061/MOD11A2')
+  .filterDate(startDate, endDate)
+  .filterBounds(cdmx)
+  .select('LST_Day_1km');
+
+// Scale factor: LST is stored in Kelvin × 0.02 → convert to °C
+var scaleLST = function(img) {
+  return img.multiply(0.02).subtract(273.15)
+            .copyProperties(img, ['system:time_start']);
+};
+lstCol = lstCol.map(scaleLST);
+
+// Long-term min/max for LST per pixel
+var lstMin = lstCol.min().clip(CDMX);
+var lstMax = lstCol.max().clip(CDMX);
+
+// TCI per image  (inverted: higher temp → worse conditions)
+var computeTCI = function(img) {
+  var tci = lstMax.subtract(img)
+                  .divide(lstMax.subtract(lstMin))
+                  .multiply(100)
+                  .rename('TCI')
+                  .copyProperties(img, ['system:time_start']);
+  return tci;
+};
+var tciCol = lstCol.map(computeTCI);
+
+// ── 5. COMBINE VCI + TCI → VHI ───────────────────────────────
+// VHI = 0.5 × VCI + 0.5 × TCI  (equal weights, Kogan 1995)
+// We join the two collections by date (within ±8 days)
+var maxDiff = ee.Filter.maxDifference({
+  difference: 8 * 24 * 60 * 60 * 1000,   // 8 days in ms
+  leftField:  'system:time_start',
+  rightField: 'system:time_start'
+});
+
+var joined = ee.Join.saveFirst('tci_match').apply({
+  primary:   vciCol,
+  secondary: tciCol,
+  condition: maxDiff
+});
+
+var computeVHI = function(feat) {
+  var vci = ee.Image(feat);
+  var tci = ee.Image(feat.get('tci_match'));
+  var vhi = vci.multiply(0.5).add(tci.multiply(0.5))
+               .rename('VHI')
+               .copyProperties(vci, ['system:time_start']);
+  return vhi;
+};
+var vhiCol = ee.ImageCollection(joined.map(computeVHI));
+
+// ── 6. VISUALIZATION PALETTES ────────────────────────────────
+var droughtPalette = [
+  '#8B0000',  // 0-10  Extreme drought (dark red)
+  '#FF0000',  // 10-20 Severe drought
+  '#FF8C00',  // 20-30 Moderate drought
+  '#FFD700',  // 30-40 Mild drought
+  '#FFFF00',  // 40-50 Watch
+  '#ADFF2F',  // 50-60 No drought
+  '#008000',  // 60-70 Good
+  '#006400'   // 70+   Excellent
+];
+
+var visParams = {min: 0, max: 100, palette: droughtPalette};
+
+// ── 7. DISPLAY MOST RECENT IMAGE ─────────────────────────────
+var latestVCI = vciCol.sort('system:time_start', false).first().clip(CDMX);
+var latestTCI = tciCol.sort('system:time_start', false).first().clip(CDMX);
+var latestVHI = vhiCol.sort('system:time_start', false).first().clip(CDMX);
+
+Map.addLayer(latestVCI, visParams, 'VCI (latest)');
+Map.addLayer(latestTCI, visParams, 'TCI (latest)');
+Map.addLayer(latestVHI, visParams, 'VHI (latest)');
+
+// ── 8. LEGEND ────────────────────────────────────────────────
+var legend = ui.Panel({style: {position: 'bottom-left', padding: '8px 15px'}});
+legend.add(ui.Label({
+  value: 'Drought Index (VHI / VCI / TCI)',
+  style: {fontWeight: 'bold', fontSize: '13px', margin: '0 0 4px 0'}
+}));
+
+var categories = [
+  {color: '#8B0000', label: '0–10: Extreme drought'},
+  {color: '#FF0000', label: '10–20: Severe drought'},
+  {color: '#FF8C00', label: '20–30: Moderate drought'},
+  {color: '#FFD700', label: '30–40: Mild drought'},
+  {color: '#FFFF00', label: '40–50: Watch'},
+  {color: '#ADFF2F', label: '50–60: No drought'},
+  {color: '#008000', label: '60–70: Good'},
+  {color: '#006400', label: '70–100: Excellent'}
+];
+categories.forEach(function(c) {
+  legend.add(ui.Panel([
+    ui.Label({style: {backgroundColor: c.color, padding: '8px', margin: '0 6px 0 0'}}),
+    ui.Label({value: c.label, style: {margin: '0', fontSize: '11px'}})
+  ], ui.Panel.Layout.Flow('horizontal')));
+});
+Map.add(legend);
+
+// ── 9. TIME-SERIES CHART (mean over CDMX) ────────────────────
+var chartVCI = ui.Chart.image.series({
+  imageCollection: vciCol,
+  region: CDMX,
+  reducer: ee.Reducer.mean(),
+  scale: 1000,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'VCI – Mean over CDMX (2023–2026)',
+  vAxis: {title: 'VCI (0–100)', minValue: 0, maxValue: 100},
+  hAxis: {title: 'Date'},
+  colors: ['#008000'],
+  lineWidth: 2
+});
+
+var chartTCI = ui.Chart.image.series({
+  imageCollection: tciCol,
+  region: CDMX,
+  reducer: ee.Reducer.mean(),
+  scale: 1000,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'TCI – Mean over CDMX (2023–2026)',
+  vAxis: {title: 'TCI (0–100)', minValue: 0, maxValue: 100},
+  hAxis: {title: 'Date'},
+  colors: ['#FF8C00'],
+  lineWidth: 2
+});
+
+var chartVHI = ui.Chart.image.series({
+  imageCollection: vhiCol,
+  region: CDMX,
+  reducer: ee.Reducer.mean(),
+  scale: 1000,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'VHI – Mean over CDMX (2023–2026)',
+  vAxis: {title: 'VHI (0–100)', minValue: 0, maxValue: 100},
+  hAxis: {title: 'Date'},
+  colors: ['#8B0000'],
+  lineWidth: 2
+});
+
+print(chartVCI);
+print(chartTCI);
+print(chartVHI);
