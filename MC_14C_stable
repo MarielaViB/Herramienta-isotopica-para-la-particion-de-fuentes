@@ -1,0 +1,399 @@
+%% Simulaciones Monte Carlo modalidad 14C + isotopos estables (MATLAB) 
+
+%% Monte Carlo Parameters
+n_simulations = 50000;
+rng(42);
+
+%% SOURCE CHARACTERISTICS
+soil_d13C = -20;    soil_d13C_std = 10;
+soil_d18O = -5;     soil_d18O_std = 8;
+soil_C14  = 5;     soil_C14_std  = 15;
+
+biomass_d13C = -22;   biomass_d13C_std = 10;
+biomass_d18O = -23;   biomass_d18O_std = 8;
+biomass_C14  = 57;  biomass_C14_std  = 67;
+
+fossil_d13C = -33.8;  fossil_d13C_std = 7.8;
+fossil_d18O = -16.5;  fossil_d18O_std = 8;
+fossil_C14  = -1000;  fossil_C14_std  = 0;
+
+%% INPUT DATA
+mixed_d13C = [-38.3126514
+-24.66007363
+-31.44907999
+-32.3116845
+-31.55842863
+-22.87409226
+-21.85429242
+-19.56640826
+-25.76549181
+-15.09019342
+-20.46136001
+-18.73730477
+-23.30100267
+-16.51107929
+-16.83338655];
+
+mixed_d13C_std = [4.504191671
+2.622413552
+7.788790328
+5.976354955
+8.65949818
+4.881722147
+1.906275822
+3.162191344
+5.165749958
+0.005190343
+4.923015459
+5.628836272
+2.947696313
+4.078165816
+1.469692449];
+
+mixed_d18O = [-33.65548503
+-20.3255402
+-24.7040354
+-23.09707262
+-30.74864946
+-13.66720035
+-12.22180084
+-15.73094674
+-21.72085381
+-12.91286714
+-12.31347169
+-18.33646369
+-7.238089672
+-7.594940106
+2.257500303];
+
+mixed_d18O_std = [1.146461737
+0.502464429
+0.986077188
+1.651064667
+2.04173448
+2.091159874
+1.43492301
+0.818352982
+0.663574645
+0.927835665
+0.528234942
+0.663574645
+0.768287432
+0.33086683
+0.316009162];
+
+obs_C14 = [-654.641378
+-411.947417
+-235.5700254
+-121.2292916
+-58.45651483
+-297.9444526
+-233.1637966
+-293.0574335
+-220.149972
+-443.3181253
+-215.5543507
+-169.827507
+-263.4954076
+-159.5999458
+-385.7928708];
+
+obs_C14_std = [22.30766349
+12.64401038
+10.41763576
+16.29106102
+25.25983525
+21.52039283
+25.71219505
+14.5146774
+13.69684191
+26.74508573
+16.0009139
+12.44209912
+24.79218103
+8.991264961
+13.86217224];
+
+day_labels = {'Dic 23','Ene','Feb','Mar','Abr','May','Jun',...
+              'Jun II','Jul','Ago','Ago II','Sep','Oct','Nov','Dic 24'};
+
+n_samples = length(mixed_d13C);
+
+%% Initialize results storage
+results = struct();
+results.sample_id = (1:n_samples)';
+fields = {'fossil','biomass','soil'};
+stats  = {'mean','std','median','p5','p95'};
+for f = 1:numel(fields)
+    for s = 1:numel(stats)
+        results.([fields{f} '_' stats{s}]) = zeros(n_samples, 1);
+    end
+end
+results.n_valid      = zeros(n_samples, 1);
+results.success_rate = zeros(n_samples, 1);
+
+%% Guardar distribuciones completas
+all_fossil_dist  = cell(n_samples, 1);
+all_biomass_dist = cell(n_samples, 1);
+all_soil_dist    = cell(n_samples, 1);
+
+%% Process each sampling day
+fprintf('=== SOURCE APPORTIONMENT: d13C + d18O + 14C ===\n');
+fprintf('Procesando %d muestreos con %d iteraciones Monte Carlo\n\n', ...
+        n_samples, n_simulations);
+
+for sample_idx = 1:n_samples
+    fprintf('--- Muestreo %d/%d (%s) ---\n', sample_idx, n_samples, day_labels{sample_idx});
+
+    f_fossil  = zeros(n_simulations, 1);
+    f_biomass = zeros(n_simulations, 1);
+    f_soil    = zeros(n_simulations, 1);
+    valid_solutions = false(n_simulations, 1);
+
+    for i = 1:n_simulations
+
+        % Muestrear end-members
+        s_d13C = normrnd(soil_d13C,    soil_d13C_std);
+        s_d18O = normrnd(soil_d18O,    soil_d18O_std);
+        s_C14  = normrnd(soil_C14,     soil_C14_std);
+
+        b_d13C = normrnd(biomass_d13C, biomass_d13C_std);
+        b_d18O = normrnd(biomass_d18O, biomass_d18O_std);
+        b_C14  = normrnd(biomass_C14,  biomass_C14_std);
+
+        ff_d13C = normrnd(fossil_d13C, fossil_d13C_std);
+        ff_d18O = normrnd(fossil_d18O, fossil_d18O_std);
+        ff_C14  = normrnd(fossil_C14,  fossil_C14_std);
+
+        % Muestrear observaciones
+        obs_d13C = normrnd(mixed_d13C(sample_idx), mixed_d13C_std(sample_idx));
+        obs_d18O = normrnd(mixed_d18O(sample_idx), mixed_d18O_std(sample_idx));
+        obs_14C  = normrnd(obs_C14(sample_idx),    obs_C14_std(sample_idx));
+
+        % Sistema sobredeterminado (4 ecuaciones, 3 incógnitas) → mínimos cuadrados
+        A = [1,       1,       1;
+             ff_d13C, b_d13C,  s_d13C;
+             ff_d18O, b_d18O,  s_d18O;
+             ff_C14,  b_C14,   s_C14];
+
+        b_vec = [1; obs_d13C; obs_d18O; obs_14C];
+
+        try
+            % Solución por mínimos cuadrados (sistema sobredeterminado)
+            fracs = A \ b_vec;
+
+            if all(isreal(fracs)) && all(fracs >= 0) && abs(sum(fracs) - 1) < 0.05
+
+                % Renormalizar para garantizar suma = 1
+                total = sum(fracs);
+                f_fossil(i)  = fracs(1) / total;
+                f_biomass(i) = fracs(2) / total;
+                f_soil(i)    = fracs(3) / total;
+                valid_solutions(i) = true;
+            end
+        catch
+            continue;
+        end
+    end
+
+    % Extraer soluciones válidas en %
+    f_fossil_valid  = f_fossil(valid_solutions)  * 100;
+    f_biomass_valid = f_biomass(valid_solutions) * 100;
+    f_soil_valid    = f_soil(valid_solutions)    * 100;
+    n_valid = sum(valid_solutions);
+
+    % Guardar distribuciones
+    all_fossil_dist{sample_idx}  = f_fossil_valid;
+    all_biomass_dist{sample_idx} = f_biomass_valid;
+    all_soil_dist{sample_idx}    = f_soil_valid;
+
+    results.n_valid(sample_idx)      = n_valid;
+    results.success_rate(sample_idx) = 100 * n_valid / n_simulations;
+
+    if n_valid > 100
+        for k = 1:3
+            switch k
+                case 1; dat = f_fossil_valid;  fld = 'fossil';
+                case 2; dat = f_biomass_valid; fld = 'biomass';
+                case 3; dat = f_soil_valid;    fld = 'soil';
+            end
+            results.([fld '_mean'])(sample_idx)   = mean(dat);
+            results.([fld '_std'])(sample_idx)    = std(dat);
+            results.([fld '_median'])(sample_idx) = median(dat);
+            results.([fld '_p5'])(sample_idx)     = prctile(dat, 5);
+            results.([fld '_p95'])(sample_idx)    = prctile(dat, 95);
+        end
+        fprintf('Válidas: %d (%.1f%%) | Fósil: %.1f±%.1f%% | Biomasa: %.1f±%.1f%% | Suelos: %.1f±%.1f%%\n\n', ...
+                n_valid, results.success_rate(sample_idx), ...
+                results.fossil_mean(sample_idx),  results.fossil_std(sample_idx), ...
+                results.biomass_mean(sample_idx), results.biomass_std(sample_idx), ...
+                results.soil_mean(sample_idx),    results.soil_std(sample_idx));
+    else
+        fprintf('ADVERTENCIA: Soluciones insuficientes (%d)\n\n', n_valid);
+    end
+end
+
+%% =====================================================================
+%% FIGURA: Histogramas Monte Carlo por día de monitoreo
+%% =====================================================================
+
+src_data   = {all_fossil_dist,  all_biomass_dist,  all_soil_dist};
+src_names  = {'Combustión fósil','Quema de biomasa','Respiración de suelos'};
+src_colors = {[0.45 0.45 0.45], [0.75 0.25 0.25], [0.25 0.65 0.25]};
+
+for d = 1:n_samples
+    figure('Position', [100, 100, 1300, 380], ...
+           'Name', sprintf('MC Distribuciones - %s', day_labels{d}));
+
+    for k = 1:3
+        subplot(1, 3, k);
+        data = src_data{k}{d};
+
+        if isempty(data)
+            text(0.5, 0.5, 'Sin datos', 'HorizontalAlignment','center');
+            axis off; continue;
+        end
+
+        mn  = mean(data);
+        p5  = prctile(data, 5);
+        p95 = prctile(data, 95);
+
+        histogram(data, 40, 'Normalization', 'pdf', ...
+                  'FaceColor', src_colors{k}, 'EdgeColor', 'none', 'FaceAlpha', 0.85);
+        hold on;
+
+        xline(mn,  '--', 'Color', src_colors{k}*0.55, 'LineWidth', 2.0);
+        xline(p5,  ':',  'Color', src_colors{k}*0.55, 'LineWidth', 1.5);
+        xline(p95, ':',  'Color', src_colors{k}*0.55, 'LineWidth', 1.5);
+
+        ylims = ylim;
+        ytop  = ylims(2) * 0.97;
+
+        text(mn,  ytop, sprintf(' Media\n %.1f%%', mn), ...
+             'FontSize', 7.5, 'Color', src_colors{k}*0.45, ...
+             'VerticalAlignment','top','HorizontalAlignment','left');
+        text(p5,  ytop, sprintf('IC 95%%\n %.1f%%', p5), ...
+             'FontSize', 7.5, 'Color', src_colors{k}*0.45, ...
+             'VerticalAlignment','top','HorizontalAlignment','right');
+        text(p95, ytop, sprintf('IC 95%%\n %.1f%%', p95), ...
+             'FontSize', 7.5, 'Color', src_colors{k}*0.45, ...
+             'VerticalAlignment','top','HorizontalAlignment','left');
+
+        title(src_names{k}, 'FontSize', 11, 'FontWeight', 'bold');
+        xlabel('Contribución (%)', 'FontSize', 10);
+        ylabel('Densidad de probabilidad', 'FontSize', 10);
+        xlim([0, 100]);
+        grid on; box on;
+        hold off;
+    end
+
+    sgtitle(sprintf('Monitoreo: %s  |  δ¹³C + δ¹⁸O + Δ¹⁴C', day_labels{d}), ...
+            'FontSize', 12, 'FontWeight', 'bold');
+end
+
+%% =====================================================================
+%% TABLA DE ESTADÍSTICOS
+%% =====================================================================
+
+fprintf('\n=== ESTADÍSTICOS POR DÍA DE MONITOREO (d13C + d18O + 14C) ===\n\n');
+fprintf('%-8s | %-8s | %s\n', 'Día', 'Fuente', ...
+        'Media±SD (%)    Mediana (%)   IC95% inf.   IC95% sup.   Válidas (%)');
+fprintf('%s\n', repmat('-', 1, 80));
+
+src_labels = {'Fósil   ','Biomasa ','Suelos  '};
+src_fields = {'fossil', 'biomass', 'soil'};
+
+for d = 1:n_samples
+    for k = 1:3
+        fld = src_fields{k};
+        fprintf('%-8s | %s | %5.1f ± %4.1f     %6.1f        %6.1f       %6.1f       %5d (%.1f%%)\n', ...
+                day_labels{d}, src_labels{k}, ...
+                results.([fld '_mean'])(d),   results.([fld '_std'])(d), ...
+                results.([fld '_median'])(d), ...
+                results.([fld '_p5'])(d),     results.([fld '_p95'])(d), ...
+                results.n_valid(d),           results.success_rate(d));
+    end
+    fprintf('%s\n', repmat('-', 1, 80));
+end
+
+fprintf('\nAnálisis completo.\n');
+
+%% =====================================================================
+%% FIGURA FINAL: Todas las fuentes superpuestas en un solo panel por día
+%%               con todos los días de monitoreo en una sola figura
+%%               (isotópos estables: δ¹³C + δ¹⁸O + Δ¹⁴C)
+%% =====================================================================
+
+n_cols = 4;
+n_rows = ceil(n_samples / n_cols);   % = 3 for 12 months
+
+figure('Position', [50, 50, 1600, 900], ...
+       'Name', 'Distribuciones combinadas (isótopos estables) – todos los días');
+
+legend_handles = gobjects(3, 1);
+
+for d = 1:n_samples
+    ax = subplot(n_rows, n_cols, d);
+    hold(ax, 'on');
+
+    max_pdf = 0;
+
+    for k = 1:3
+        data = src_data{k}{d};
+        if isempty(data)
+            continue;
+        end
+
+        % Histograma transparente
+        histogram(ax, data, 35, ...
+                  'Normalization', 'pdf', ...
+                  'FaceColor', src_colors{k}, ...
+                  'EdgeColor', 'none', ...
+                  'FaceAlpha', 0.22);
+
+        % KDE suavizada (clamp para evitar error en bordes)
+        data_kde = min(max(data, 0.01), 99.99);
+        [f_kde, xi_kde] = ksdensity(data_kde);
+        in_range = xi_kde >= 0 & xi_kde <= 100;
+        xi_kde = xi_kde(in_range);
+        f_kde  = f_kde(in_range);
+
+        ph = plot(ax, xi_kde, f_kde, '-', ...
+                  'Color', src_colors{k}, ...
+                  'LineWidth', 2.2);
+
+        % Línea vertical en la media
+        mn_d = mean(data);
+        xline(ax, mn_d, '--', 'Color', src_colors{k}, 'LineWidth', 1.4, 'Alpha', 0.8);
+
+        max_pdf = max(max_pdf, max(f_kde));
+
+        if d == 1
+            legend_handles(k) = ph;
+        end
+    end
+
+    title(ax, day_labels{d}, 'FontSize', 11, 'FontWeight', 'bold');
+    xlabel(ax, 'Contribución (%)', 'FontSize', 8.5);
+    if mod(d-1, n_cols) == 0
+        ylabel(ax, 'Densidad PDF', 'FontSize', 8.5);
+    end
+    xlim(ax, [0 100]);
+    if max_pdf > 0
+        ylim(ax, [0, max_pdf * 1.18]);
+    end
+    grid(ax, 'on');
+    box(ax, 'on');
+    set(ax, 'FontSize', 8);
+    hold(ax, 'off');
+end
+
+% Leyenda compartida centrada en la parte inferior
+lgd = legend(legend_handles, src_names, ...
+             'Orientation', 'horizontal', ...
+             'FontSize',    10, ...
+             'Box',         'on');
+lgd.Position = [0.25, 0.005, 0.50, 0.035];
+
+sgtitle('Distribuciones Monte Carlo por mes – δ¹³C + δ¹⁸O + Δ¹⁴C  |  todas las fuentes superpuestas', ...
+        'FontSize', 13, 'FontWeight', 'bold');
