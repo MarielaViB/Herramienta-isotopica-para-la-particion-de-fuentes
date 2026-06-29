@@ -1,4 +1,4 @@
-%% Simulaciones Monte Carlo modalidad 14C + isotopos (MATLAB)
+%% Simulaciones Monte Carlo modalidad 14C + CO/CO2 (MATLAB)
 %% Monte Carlo Parameters
 n_simulations = 50000;
 rng(42);
